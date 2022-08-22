@@ -13,32 +13,9 @@
   *  GPS, IMU, acellerometer, barometer, temperature sensor, power sensor, CSV data 
   *  logger, data UART TX and low power mode.
   * 
-  * Last Update: 03/07/2022
+  * Last Update: 22/09/2022
   *********************************************************************************
   */
-
-
-/* ****** SI SE MODIFICA EL CÓDIGO EN EL MAIN DE GIT, DEJARLO SIEMPRE QUE COMPILE BIEN Y DOCUMENTAR LA MODIFICACIÓN ****** */
-
-
-
-
-  /* COSAS QUE FALTAN:
-  * - Hacer codigo que reciba los codigos de error y "los convierta en texto"
-  * - Integrar sensores secundarios
-  * - Interrupción Serial de RPi para mandar datos instantáneos y para despertar al arduino
-  * - Dar nombre al archivo de datos con la fecha y hora (línea 176 aprox.)
-  * - Comprobar si a larga distancia envía señal (OK a 450m línea vista)
-  * - Hacer lista de pines ocupados
-  * - Medir el tiempo de medida de todos los sensores
-  * - Etiquetar las sondas de temperatura con su dirección y su nombre para identificarlas en el código y en físico
-
-  * EXTRA:
-  * - Proponer un mejor orden del código o una mejor sintáxis
-  * - Documentar las funciones
-  */
-
-
 
 
 
@@ -101,6 +78,8 @@ float p_bat;
 double temp_ind;
 double heater_duty;
 double setpoint = SETPOINT;
+
+/* Status variables */
 bool GPS_status;
 bool barometer_status;
 bool IMU_status;
@@ -109,23 +88,27 @@ bool powerBat_status;
 bool heater_status;
 bool secSensors_status;
 bool SD_status;
+
+/* RTC */
 const uint8_t hh=00, minut=00, sec=0;
 const uint8_t dd=27, mm=7, aa=22;
+
+/* SD variables */
 String file_name = "log_";
 char RTC_time [40] = {0};
-typedef struct{
-  float vph1;
-  float vph2;
-  float vph3;
-  float vph4;
-}Solar_t;
+char buf[1000]={0};
 
-Solar_t xsolar1;
-Solar_t xsolar2;
-Solar_t xsolar3;
 
-char buf[5000]={0};
-
+//typedef struct{
+//  float vph1;
+//  float vph2;
+//  float vph3;
+//  float vph4;
+//}Solar_t;
+//
+//Solar_t xsolar1;
+//Solar_t xsolar2;
+//Solar_t xsolar3;
 
 /* PID */
 double aggKp=4, aggKi=0.2, aggKd=1;
@@ -201,12 +184,6 @@ void setup()
     rtc.setDay(dd);
     rtc.setMonth(mm);
     rtc.setYear(aa);
-//    {
-//      char buff[20];
-//      sprintf(buff, "%02d%02d_%02d%02d", dd,mm,hh,minut);
-//      file_name=String(buff);
-//    }
-
 
   if (!LoRa.begin(433E6))               Serial.println(F("*** ERROR LoRa ***"));
   else{                                 Serial.println(F("LoRa INITIALIZATION SUCCESSFUL"));
@@ -249,7 +226,8 @@ void setup()
     else
     {
       Serial.println(F("DATA LOGGER OPENING SUCCESSFUL"));
-      logFile.write("time,latitude,longitude,GPSaltitude,speed,out_press,out_temp,MSaltitude,x,y,z,temp_bat1,temp_bat2,v_bat,i_bat,p_bat,temp_ind\r\n");
+      logFile.write("time,latitude,longitude,GPSaltitude,speed,out_press,out_temp,");
+      logFile.write("MSaltitude,x,y,z,temp_bat1,temp_bat2,v_bat,i_bat,p_bat,temp_ind\r\n");
       logFile.close();
     }
   }
@@ -354,7 +332,7 @@ bool getIMU()
 {
   if (IMU.accelerationAvailable())
   {
-    IMU.readAcceleration(x, y, z); // COMPROBAR TOLERANCIAS DE LA LECTURA
+    IMU.readAcceleration(x, y, z);
     return 1; 
   }
   else return 0;
@@ -397,7 +375,7 @@ bool getSecSensors()
 bool setPowerHeater()
 {
   mean_temp=random(-20,2);
-  double gap = abs(setpoint-mean_temp); //distance away from setpoint
+  double gap = abs(setpoint-mean_temp);
   bool ret;
   if (gap < 10)
   {
@@ -450,8 +428,8 @@ bool SD_save()
     logFile = SD.open(file, FILE_WRITE);
     if(logFile)
     {
-      Serial.println(file);
-      logFile.write("time,latitude,longitude,GPSaltitude,speed,out_press,out_temp,MSaltitude,x,y,z,temp_bat1,temp_bat2,v_bat,i_bat,p_bat,temp_ind\r\n");
+      logFile.write("time,latitude,longitude,GPSaltitude,speed,out_press,out_temp,");
+      logFile.write("MSaltitude,x,y,z,temp_bat1,temp_bat2,v_bat,i_bat,p_bat,temp_ind\r\n");
       logFile.close();
     }
     else  return 0;
@@ -461,12 +439,15 @@ bool SD_save()
   logFile = SD.open(file, FILE_WRITE);
   if(logFile)
   {
-    int len = sprintf(buf, "%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\r\n", 
+    int len = sprintf(buf, "%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,", 
     RTC_time,GPSlatitude, GPSlongitude, GPSaltitude, GPSspeed, out_press, 
-    out_temp, MSaltitude, x,  y, z, temp_bat1, temp_bat2, 
-    v_bat, i_bat, p_bat, temp_ind);
-    Serial.println(len);
+    out_temp, MSaltitude);
+    logFile.write(buf, len); 
+       
+    len = sprintf(buf, "%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\r\n", 
+    x,  y, z, temp_bat1, temp_bat2, v_bat, i_bat, p_bat, temp_ind);
     logFile.write(buf, len);
+    
     logFile.close();
   }
   else  return 0;
@@ -480,7 +461,7 @@ void Tx_RPi()
 {
   char buff[50]={0};
   sprintf(buff, "%.2f,%.2f,%.2f,%.2f\r\n", GPSlatitude, GPSlongitude, GPSaltitude, GPSspeed);
-  Serial.print(buff);
+//  Serial.print(buff);
 }
 
 
