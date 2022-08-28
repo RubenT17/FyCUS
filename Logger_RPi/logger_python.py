@@ -1,6 +1,7 @@
 """
 /* **********************************************************************************
  *
+ *  file            logger_python.py
  *  Created on: 	24.08.2022
  *  Author: 		Rubén Torres Bermúdez <rubentorresbermudez@gmail.com>
  *  Organism:		FyCUS. Universidad de Sevilla.
@@ -10,7 +11,7 @@
  *      It is a simple data logger that saves the data in a .csv file in the
  *      current directory and in a backup directory "./data_backup". 
  *      
- *		Creative Commons (CC) 2021 Rubén Torres Bermúdez
+ *		logger_python.py Copyright (C) 2022  Rubén Torres Bermúdez
  *
  * **********************************************************************************
 */
@@ -19,14 +20,15 @@
 
 
 import serial
-from os import mkdir, _exit
+from os import mkdir, _exit, chdir
 from os.path import isdir
 from time import sleep, time, strftime
 from shutil import move
 
 
-PORT = "COM8"
-MIN_TO_SAVE = 5
+PORT = "/dev/ttyACM0"
+MIN_TO_SAVE = 0.12
+DIRECTORY = "/home/pi/Desktop"
 tiempo = time()
 cuenta = 0
 
@@ -39,15 +41,16 @@ def serial_init():
     ser = serial.Serial(PORT, 115200)
     return ser
 
+
 # guardar datos en txt
 def save_data(data):
     global tiempo, cuenta
     with open('data.csv', "a") as file:
-        file.write(data)
+        file.write(strftime("%H:%M:%S") + "," + data)
         file.close()
     if((time()-tiempo) > (60*MIN_TO_SAVE)):
         check_path()
-        move("data.csv", f"data_backup/{cuenta}_" + strftime("%H_%M_%S") + ".csv")
+        move("data.csv", "data_backup/" + strftime("%H:%M:%S") + f"_{cuenta}.csv")
         cuenta = cuenta + 1
         tiempo = time()
 
@@ -58,13 +61,14 @@ def save_data(data):
 def data_Rx():
     while True:
         if ser.inWaiting():
-            data = ser.read_all().decode("utf-8")
+            data = ser.readline().decode("utf-8").strip("\n")
             save_data(data)
 
 
 
 
 if __name__ == "__main__":
+    chdir(DIRECTORY)
     check_path()
     while True:
         sleep(3)
