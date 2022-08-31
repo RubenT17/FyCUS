@@ -11,9 +11,9 @@
   *  FYCUS university project. This project incorporates:
   *  Peripherals and devices initialization check, function check, WDT, RTC, LoRa, 
   *  GPS, IMU, acellerometer, barometer, temperature sensor, power sensor, CSV data 
-  *  logger SD and data logger UART TX.
+  *  logger SD and data logger UART.
   * 
-  * Last Update: 22/09/2022
+  * Last Update: 28/09/2022
   * 
   *  CubeSat_code.ino Copyright (C) 2022  Rubén Torres Bermúdez
   *********************************************************************************
@@ -62,8 +62,15 @@
 #define WDT_TIME          8000
 
 /* PID */
-#define SETPOINT          2.0
+#define SETPOINT          25.0
+#define MAX_GAP           3
 #define MAX_PID           190
+
+
+/* Debugger */
+#define SERIAL_DEBUG      0
+#define LORA_DEBUG        1
+
 
 
 
@@ -91,15 +98,17 @@ double heater_duty;         //double
 double setpoint = SETPOINT; //double
 
 /* Status variables */
-bool GPS_status;
-bool barometer_status;
-bool IMU_status;
-bool tempBat_status;
-bool powerBat_status;
-bool heater_status;
-bool secSensors_status;
-bool SD_status;
-bool INA_status;
+bool GPS_status=0;
+bool MS_status=0;
+bool IMU_status=0;
+bool DS18b20_status=0;
+bool INA_status=0;
+bool SD_status=0;
+bool tempBat_status=0;
+bool powerBat_status=0;
+bool heater_status=0;
+bool logger_status=0;
+
 
 /* RTC */
 const uint8_t hh=00, minut=00, sec=0;
@@ -134,7 +143,7 @@ PID PID_bat(&mean_temp, &heater_duty, &setpoint, consKp, consKi, consKd, DIRECT)
 
 
 
-/* DS18B20 device adress */
+/* DS18B20 device address */
 DeviceAddress INT1      = {0x28, 0xFF, 0x64, 0x1E, 0x23, 0xA0, 0xC7, 0xBC};
 DeviceAddress INT2      = {0x28, 0xFF, 0x64, 0x1E, 0x23, 0xB6, 0x51, 0x36};
 DeviceAddress dir_ind1  = {0x28, 0xFF, 0x64, 0x1E, 0x23, 0xBA, 0xF5, 0xB5};
@@ -147,12 +156,17 @@ bool getBarometer();
 bool getIMU();
 bool getTempBat();
 bool getPowerBat();
-bool getSecSensors();
 bool setPowerHeater();
 bool SD_save();
 void RTC_wakeUp();
 void RPi_wakeUp();
 void Tx_RPi();
+void Rx_RPi();
+void logger_RPi();
+void debug_states();
+void debug_variables();
+void LoRa_debug();
+
 
 
 
@@ -190,10 +204,18 @@ void setup()
 
   if (!LoRa.begin(433E6))               Serial.println(F("*** ERROR LoRa ***"));
   else{                                 Serial.println(F("LoRa INITIALIZATION SUCCESSFUL"));
+  LoRa.setSignalBandwidth(125E3);
+  LoRa.enableCrc();
+  LoRa.setTxPower(20);
+
+#if LORA_DEBUG
+    LoRa.setSpreadingFactor(7);
+    LoRa.setCodingRate4(5);
+
+#else
     LoRa.setSpreadingFactor(12);
     LoRa.setCodingRate4(8);
-    LoRa.enableCrc();
-    LoRa.setTxPower(20);
+#endif
   }
 
   
@@ -201,45 +223,56 @@ void setup()
     INA_status=0;
   }
   else{                                 Serial.println(F("INA260 INITIALIZATION SUCCESSFUL"));
+    INA_status=1;
     ina260.setCurrentConversionTime(INA260_TIME_2_116_ms);
     ina260.setVoltageConversionTime(INA260_TIME_2_116_ms);
     ina260.setAveragingCount(INA260_COUNT_4);    
   }
 
 
-  if (!GPS.begin(GPS_MODE_SHIELD))      Serial.println(F("*** ERROR GPS ***"));
+  if (!GPS.begin(GPS_MODE_SHIELD)){     Serial.println(F("*** ERROR GPS ***"));
+    GPS_status=0;
+  }
   else{                                 Serial.println(F("GPS INITIALIZATION SUCCESSFUL"));
-      delay(500);
+      GPS_status=1;
+      delay(200);
       configNavigationUBX(6);
-      delay(500);
+      delay(200);
     }
 
 
   if(!ms5607.begin()){                  Serial.println(F("*** ERROR MS5607B (PARALLAX) ***"));
-  barometer_status=0;
+    MS_status=0;
   }
   else                                  Serial.println(F("MS5607B (PARALLAX) INITIALIZATION SUCCESSFUL"));
+    MS_status=1;
 
 
   if (!IMU.begin()){                    Serial.println(F("*** ERROR IMU ***"));
-    IMU_status = 0;
+    IMU_status=0;
   }
-  else                                  Serial.println(F("IMU INITIALIZATION SUCCESSFUL "));
+  else{                                 Serial.println(F("IMU INITIALIZATION SUCCESSFUL "));
+    IMU_status=1;
+  }
 
 
-  if (!SD.begin(CS_SD_PIN)){            Serial.println(F("*** ERROR SD ***"));
-    SD_status = 0;
-  }
-  else{                                 Serial.println(F("SD INITIALIZATION SUCCESSFUL"));
-    String file = file_name + String("0") + String(".csv");
-    logFile = SD.open(file, FILE_WRITE);
-    if(!logFile)                        Serial.println(F("*** DATA LOGGER OPENING ERROR ***"));
-    else{                               Serial.println(F("DATA LOGGER OPENING SUCCESSFUL"));
-      logFile.write("time,latitude,longitude,GPSaltitude,speed,out_press,out_temp,");
-      logFile.write("MSaltitude,x,y,z,temp_bat1,temp_bat2,v_bat,i_bat,p_bat,temp_ind\r\n");
-      logFile.close();
-    }
-  }
+//  if (!SD.begin(CS_SD_PIN)){            Serial.println(F("*** ERROR SD ***"));
+//    SD_status = 0;
+//  }
+//  else{                                 Serial.println(F("SD INITIALIZATION SUCCESSFUL"));
+//    SD_status = 1;
+//    String file = file_name + String("0") + String(".csv");
+//    logFile = SD.open(file, FILE_WRITE);
+//    if(!logFile){                       Serial.println(F("*** DATA LOGGER OPENING ERROR ***"));
+//      logger_status=0;
+//    }
+//    else{                               Serial.println(F("DATA LOGGER OPENING SUCCESSFUL"));
+//      logger_status=1;
+//      logFile.write("time,latitude,longitude,GPSaltitude,speed,out_press,out_temp,");
+//      logFile.write("MSaltitude,x,y,z,temp_bat1,temp_bat2,v_bat,i_bat,p_bat,temp_ind\r\n");
+//      logFile.close();
+//    }
+//  }
 
   DS18B20.begin();
   DS18B20.setResolution(12);
@@ -263,7 +296,8 @@ void setup()
 
   Watchdog.reset();
   t1= millis();
-  t2=millis();
+  t2=t1;
+  t3=t1;
 }
 
 
@@ -275,43 +309,38 @@ void loop()
 
   if ((millis() - t1) > SENSOR_TIME)
   {
-    // Serial.println("INTRO SENSORES");
     digitalWrite(INBUILT_LED_PIN, HIGH);
     sprintf(RTC_time, "%02d:%02d:%02d", rtc.getHours(), rtc.getMinutes(), rtc.getSeconds());
+    
     GPS_status = getGPS();
-//    Serial.println("GPS OK");
-    barometer_status = getBarometer();
+    MS_status = getBarometer();
     IMU_status = getIMU();
-    // Serial.println("IMU OK");
-    tempBat_status = getTempBat();
-    // Serial.println("DS OK");
-    powerBat_status = getPowerBat();
-    // Serial.println("INA OK");
-    heater_status = setPowerHeater();  // Hacer comprobación de cuantas veces se le manda un 1 --> Fallo Temp   // O ver con millis() si sube la temp o no
-    // Serial.println("Heater OK");
-    secSensors_status = getSecSensors();
-    // Serial.println("SecSens OK");
+    DS18b20_status = getTempBat();
+    INA_status = getPowerBat();
+    heater_status = setPowerHeater();
+
+#if SERIAL_DEBUG
     debug_variables();
     debug_states();
-    // Serial.println("Debug OK");
+#endif
     digitalWrite(INBUILT_LED_PIN, LOW);
-    // Serial.println("PIN OK");
     t1=millis();
   }
 
   if (millis() - t2 > LOGGER_TIME)
   {
     logger_RPi();
-    // Serial.println("INTRO SD");
-    SD_status = SD_save();
-    // Serial.println("SD OK");
+    //SD_status = SD_save();
     t2=millis();
   }
   
   if (millis() - t3 > LORA_TIME)
   {
-    // Serial.println("INTRO LORA");
     LoRa_Tx();
+#if LORA_DEBUG
+    LoRa_debug();
+#endif
+    
     t3=millis();
   }
 
@@ -320,6 +349,7 @@ void loop()
     Rx_RPi();
     flag_RPi=0;
   }
+  
   
 }
 
@@ -366,10 +396,11 @@ bool getGPS()
 */
 bool getBarometer()
 {
-  if(!barometer_status)
+  if(!MS_status)
   {
     if(!ms5607.begin()) return 0;
   }
+  
   if (ms5607.readDigitalValue())  
   {
     out_temp    = ms5607.getTemperature();  //ºC
@@ -390,6 +421,7 @@ bool getIMU()
   {
     if(!IMU.begin()) return 0;
   }
+  
   if (IMU.accelerationAvailable())
   {
     IMU.readAcceleration(x, y, z);
@@ -414,6 +446,9 @@ bool getTempBat()
   delayMicroseconds(15); 
   mean_temp = (temp_bat1+temp_bat2)/2;
 
+  if(mean_temp<(setpoint-3)) tempBat_status = 0;
+  else tempBat_status = 1;
+
   if (temp_bat1 == DEVICE_DISCONNECTED_C || temp_bat2 == DEVICE_DISCONNECTED_C) return 0;
   else return 1;
 }
@@ -429,46 +464,104 @@ bool getPowerBat()
   {
     if(!ina260.begin()) return 0;
   }
+
   v_bat = ina260.readBusVoltage()/1000;   //V
   i_bat = ina260.readCurrent();           //mA
   p_bat = ina260.readPower();             //mW 
-  if (v_bat<13.7 || i_bat>10000.0)  return 0;
-  else return 1;
-}
-
-/**
-* @brief Measure secondary sensors
-* @returns true if success
-*/
-bool getSecSensors()
-{
+  if (v_bat<14.0 || i_bat>10000.0)  powerBat_status=0;
+  else powerBat_status=1;
   
   return 1;
 }
+
 
 
 /**
 * @brief Save data in SD card (SPI)
 * @returns true if agresive PID is set
 */
+
 bool setPowerHeater()
 {
-  double gap = abs(setpoint-mean_temp);
-  bool ret;
-  if (gap < 10)
+  if(!DS18b20_status)
   {
-    PID_bat.SetTunings(consKp, consKi, consKd);
-    ret=0;
+    analogWrite(HEATER_PIN, 60);
+    return 0;
   }
-  else
+  else 
   {
-     PID_bat.SetTunings(aggKp, aggKi, aggKd);
-     ret=1;
+    double gap = abs(setpoint-mean_temp);
+    bool ret;
+    if (gap < 3)
+    {
+      PID_bat.SetTunings(consKp, consKi, consKd);
+      ret=0;
+    }
+    else
+    {
+       PID_bat.SetTunings(aggKp, aggKi, aggKd);
+       ret=1;
+    }
+    PID_bat.Compute();
+    analogWrite(HEATER_PIN, heater_duty);
+    return ret;
   }
-  PID_bat.Compute();
-  analogWrite(HEATER_PIN, heater_duty);
-  return ret;
 }
+
+
+
+/**
+* @brief Save data in SD card
+* @returns true if success
+*/
+//bool SD_save()
+//{
+//  static unsigned int count = 0;
+//  static unsigned int num = 0;
+//  String file;  
+//  
+//  if(!SD_status)
+//  {
+//    if (!SD.begin(CS_SD_PIN)) return 0;
+//  }
+//    
+//  count++;
+//  if(count>200)
+//  {
+//    num++;
+//    count=1;
+//    file = file_name + String(num) + String(".csv");
+//    logFile = SD.open(file, FILE_WRITE);
+//    if(logFile)
+//    {
+//      logger_status=1;
+//      logFile.write("time,latitude,longitude,GPSaltitude,speed,out_press,out_temp,");
+//      logFile.write("MSaltitude,x,y,z,temp_bat1,temp_bat2,v_bat,i_bat,p_bat,temp_ind\r\n");
+//      logFile.close();
+//    }
+//    else  logger_status=0;
+//  }
+//  else 
+//  file = file_name + String(num) + String(".csv");
+//  
+//  logFile = SD.open(file, FILE_WRITE);
+//  if(logFile)
+//  {
+//    logger_status=1;
+//    int len = sprintf(buf, "%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,", 
+//    RTC_time,GPSlatitude, GPSlongitude, GPSaltitude, GPSspeed, out_press, out_temp, MSaltitude);
+//    logFile.write(buf, len); 
+//
+//    len = sprintf(buf, "%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\r\n", 
+//    x,  y, z, temp_bat1, temp_bat2, v_bat, i_bat, p_bat, temp_ind);
+//    logFile.write(buf, len);
+//    
+//    logFile.close();
+//  }
+//  else  logger_status=0;
+//
+//  return 1;
+//}
 
 
 
@@ -478,58 +571,11 @@ bool setPowerHeater()
 */
 void LoRa_Tx()
 {  
-  uint8_t func_status = GPS_status<<7 | barometer_status<<6 | IMU_status<<5 | tempBat_status<<4 |
-                        powerBat_status<<3 | heater_status<<2 | secSensors_status<<1 | SD_status;
+  uint16_t func_status = 1<<10 | GPS_status<<9 | MS_status<<8 | IMU_status<<7 | DS18b20_status<<6 | INA_status<<5  | SD_status<<4 |
+                         tempBat_status<<3 | powerBat_status<<2 | heater_status<<1 | logger_status;
   LoRa.beginPacket();
   LoRa.print(func_status, HEX);
   LoRa.endPacket();
-}
-
-
-/**
-* @brief Save data in SD card
-* @returns true if success
-*/
-bool SD_save()
-{
-  static unsigned int count = 0;
-  static unsigned int num = 0;
-  String file;
-  
-  count++;
-  if(count>200)
-  {
-    num++;
-    count=1;
-    file = file_name + String(num) + String(".csv");
-    logFile = SD.open(file, FILE_WRITE);
-    if(logFile)
-    {
-      logFile.write("time,latitude,longitude,GPSaltitude,speed,out_press,out_temp,");
-      logFile.write("MSaltitude,x,y,z,temp_bat1,temp_bat2,v_bat,i_bat,p_bat,temp_ind\r\n");
-      logFile.close();
-    }
-    else  return 0;
-  }
-  else 
-  file = file_name + String(num) + String(".csv");
-  
-  logFile = SD.open(file, FILE_WRITE);
-  if(logFile)
-  {
-    int len = sprintf(buf, "%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,", 
-    RTC_time,GPSlatitude, GPSlongitude, GPSaltitude, GPSspeed, out_press, out_temp, MSaltitude);
-    logFile.write(buf, len); 
-       
-    len = sprintf(buf, "%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\r\n", 
-    x,  y, z, temp_bat1, temp_bat2, v_bat, i_bat, p_bat, temp_ind);
-    logFile.write(buf, len);
-    
-    logFile.close();
-  }
-  else  return 0;
-
-  return 1;
 }
 
 
@@ -560,9 +606,11 @@ void Tx_RPi()
 */
 void logger_RPi()
 {
-    int len = sprintf(buf, "%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\r\n", 
-    RTC_time,GPSlatitude, GPSlongitude, GPSaltitude, GPSspeed, out_press, out_temp, MSaltitude, x,  y, z, temp_bat1, temp_bat2, v_bat, i_bat, p_bat, temp_ind);
-    Serial.write(buf, len);
+  if(Serial)  logger_status=1;
+  else        logger_status=0;
+  int len = sprintf(buf, "%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\r\n", 
+  RTC_time,GPSlatitude, GPSlongitude, GPSaltitude, GPSspeed, out_press, out_temp, MSaltitude, x,  y, z, temp_bat1, temp_bat2, v_bat, i_bat, p_bat, temp_ind);
+  Serial.write(buf, len);
 }
 
 /**
@@ -571,9 +619,9 @@ void logger_RPi()
 */
 void debug_states()
 {
-  Serial.println("Estado de las funciones:");
-  uint8_t func_status = GPS_status<<7 | barometer_status<<6 | IMU_status<<5 | tempBat_status<<4 |
-                    powerBat_status<<3 | heater_status<<2 | secSensors_status<<1 | SD_status;
+  Serial.println("Código de errores:");
+  uint16_t func_status = 1<<10 | GPS_status<<9 | MS_status<<8 | IMU_status<<7 | DS18b20_status<<6 | INA_status<<5  | SD_status<<4 |
+                         tempBat_status<<3 | powerBat_status<<2 | heater_status<<1 | logger_status;
   Serial.println(func_status, BIN);
   Serial.println("\n");
 
@@ -587,6 +635,9 @@ void debug_states()
 void debug_variables()
 {
   Serial.println("Valores de las variables:");
+  //    int len = sprintf(buf, "HoraWAN:%s\r\n GPSlatitude:%.3f, GPSlongitude%.3f, GPSaltitude:%.3f, GPSspeed:%.3f,\r\n out_press:%.3f, out_temp:%.3f, MSaltitude%.3f\r\n x:%.3f, y:%.3f, z:%.3f\r\n temp_bat1:%.3f, temp_bat2:%.3f, temp_ind:%.3f\r\n v_bat:%.3f, i_bat:%.3f, p_bat:%.3f\r\n\n\n", 
+//    RTC_time, GPSlatitude, GPSlongitude, GPSaltitude, GPSspeed, out_press, out_temp, MSaltitude, x,  y, z, temp_bat1, temp_bat2, temp_ind, v_bat, i_bat, p_bat);
+// Serial.write(buf, len);
   Serial.println(GPSlatitude);
   Serial.println(GPSlongitude);
   Serial.println(GPSaltitude);
@@ -609,4 +660,37 @@ void debug_variables()
   Serial.println();
   Serial.println(millis());
   Serial.println("\n");
+}
+
+void LoRa_debug()
+{
+  LoRa.beginPacket();
+    LoRa.println("Valores de las variables:");
+    LoRa.println(GPSlatitude);
+    LoRa.println(GPSlongitude);
+    LoRa.println(GPSaltitude);
+    LoRa.println(GPSspeed);
+    LoRa.println(GPSsatellites);
+    LoRa.println(out_press);
+    LoRa.println(out_temp);
+    LoRa.println(MSaltitude);
+    LoRa.println(x); 
+    LoRa.println(y);
+    LoRa.println(z);
+    LoRa.println(temp_bat1);
+    LoRa.println(temp_bat2); 
+    LoRa.println(mean_temp); 
+    LoRa.println(temp_ind);
+    LoRa.println(heater_duty);
+    LoRa.println(v_bat);
+    LoRa.println(i_bat);
+    LoRa.println(p_bat);
+    LoRa.println();
+
+  LoRa.println("Código de errores:");
+  uint16_t func_status = 1<<10 | GPS_status<<9 | MS_status<<8 | IMU_status<<7 | DS18b20_status<<6 | INA_status<<5  | SD_status<<4 |
+                         tempBat_status<<3 | powerBat_status<<2 | heater_status<<1 | logger_status;
+  LoRa.println(func_status, BIN);
+  LoRa.println("\n");
+  LoRa.endPacket();
 }
